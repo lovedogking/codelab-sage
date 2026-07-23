@@ -1,5 +1,7 @@
 # codelab-sage
 
+**English | [中文](README.zh-CN.md)**
+
 A terminal CLI agent distilled from the wisdom of Codelab.
 
 `codelab-sage` runs in your terminal, understands natural language, and uses a large language model together with built-in tools to complete real engineering tasks: reading files, writing files, running shell commands, checking the weather, and more.
