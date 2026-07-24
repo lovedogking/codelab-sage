@@ -1,15 +1,18 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { confirm } from '@inquirer/prompts';
 import type { SageConfig } from '../../config/schema.js';
 import type { Tool } from '../tool.js';
 import { CodelabSageError } from '../../utils/errors.js';
+import { PermissionManager } from '../../permissions/manager.js';
 
-export function createWriteFileTool(config: SageConfig): Tool {
+export function createWriteFileTool(
+  config: SageConfig,
+  permissionManager?: PermissionManager,
+): Tool {
   return {
     name: 'write_file',
     description:
-      'Write content to a file. If the file already exists and "append" is false, a confirmation is required unless explicitly disabled.',
+      'Write content to a file. If the file already exists and "append" is false, a confirmation is required unless explicitly disabled or YOLO mode is on.',
     parameters: {
       type: 'object',
       properties: {
@@ -48,11 +51,20 @@ export function createWriteFileTool(config: SageConfig): Tool {
         exists = false;
       }
 
-      if (exists && !append && config.confirmDestructive !== false) {
-        const answer = await confirm({
-          message: `File "${args.path}" already exists. Overwrite?`,
-          default: false,
-        });
+      const shouldConfirm =
+        permissionManager?.shouldConfirm({
+          toolName: 'write_file',
+          destructive: exists && !append,
+          targetPath: filePath,
+        }) ?? (exists && !append && config.confirmDestructive !== false);
+
+      if (shouldConfirm) {
+        const answer = permissionManager
+          ? await permissionManager.confirm(
+              `File "${args.path}" already exists. Overwrite?`,
+              false,
+            )
+          : true;
         if (!answer) {
           throw new CodelabSageError('User declined to overwrite file', 'TOOL_USER_DECLINED');
         }

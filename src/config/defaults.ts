@@ -16,4 +16,10 @@ export const defaultConfig: SageConfig = {
       requireConfirm: true,
     },
   },
+  providers: [],
+  activeProvider: '',
+  activeRole: undefined,
+  activeAgent: undefined,
+  yolo: false,
+  contextLimit: 128000,
 };

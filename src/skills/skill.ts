@@ -7,6 +7,7 @@ export const skillManifestSchema = z.object({
   author: z.string().optional(),
   tags: z.array(z.string()).optional(),
   priority: z.number().int().default(0),
+  role: z.string().optional(),
 });
 
 export type SkillManifest = z.infer<typeof skillManifestSchema>;

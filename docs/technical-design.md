@@ -1,9 +1,9 @@
 # codelab-sage 技术设计文档
 
-> 版本：v1.0  
-> 作者：Codelab 技术架构组  
-> 日期：2026-07-21  
-> 状态：设计稿 / 待评审
+> 版本：v1.2
+> 作者：Codelab 技术架构组
+> 日期：2026-07-21（初稿）、2026-07-23（修订）
+> 状态：已实现 / v0.6.0 可用
 
 ---
 
@@ -27,14 +27,16 @@ Codelab 组织在长期的项目实践中沉淀了大量方法论、编码规范
 ### 1.3 核心功能列表
 
 - **自然语言对话**：用户通过终端输入自然语言指令，Agent 理解意图并给出回答。
+- **主 Agent + 子 Agent**：内置 `coder`、`explore`、`plan` 子 Agent，可按定义过滤工具与 Skill。
 - **ReAct 推理循环**：支持“思考 → 行动（工具调用）→ 观察 → 再思考”的多轮循环，直到任务完成。
-- **内置工具系统**：至少提供 `read_file`、`write_file`、`bash`、`weather` 等工具，并支持扩展。
-- **Skill 注入**：从本地或远程加载 Markdown 格式的 Skill 文件，融合进 System Prompt。
-- **交互式 REPL 模式**：持续对话，保留上下文，支持多轮追问与修正。
+- **内置工具系统**：提供 `read_file`、`write_file`、`bash`、`weather`、`search_code`、`search_files`，并支持 MCP 外部工具扩展。
+- **Skill 注入**：从本地加载 Markdown 格式的 Skill 文件，融合进 System Prompt，支持按 `role` 与 `tags` 过滤。
+- **交互式 REPL 模式**：持续对话，保留上下文，支持全屏 blessed UI 与简单行模式两种界面。
 - **单条命令模式**：直接通过 `codelab-sage <query>` 完成任务后退出。
-- **配置与鉴权**：支持 API Key 管理、模型选择、自定义 Skill 目录、日志级别等。
-- **安全与确认机制**：对写文件、执行命令等敏感操作进行风险提示或二次确认。
-- **对话历史（可选持久化）**：内存中保留当前会话上下文，可选保存到本地历史文件。
+- **配置与鉴权**：支持 API Key 管理、多 provider、模型选择、自定义 Skill 目录、日志级别等。
+- **权限与 YOLO 模式**：支持全局确认、按工具类型配置、工作目录外额外保护，以及 `/yolo` 跳过确认。
+- **会话持久化**：完整对话可保存、加载、复刻、列出，存储在 `~/.codelab-sage/sessions/`。
+- **MCP 支持**：可通过 stdio 加载外部 MCP 服务器，将 MCP 工具注册为 `{serverName}_{toolName}`。
 
 ### 1.4 项目愿景
 
@@ -89,44 +91,45 @@ Codelab 组织在长期的项目实践中沉淀了大量方法论、编码规范
 ### 3.1 整体架构图
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                              用户终端                                     │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────┐   │
-│  │ 单条命令模式  │    │ 交互式 REPL   │    │ 配置 / 帮助 / 版本信息    │   │
-│  └──────┬───────┘    └──────┬───────┘    └──────────────────────────┘   │
-└─────────┼───────────────────┼────────────────────────────────────────────┘
-          │                   │
-          └─────────┬─────────┘
-                    ▼
-          ┌─────────────────────┐
-          │     CLI 入口模块     │   commander 解析参数，分发执行模式
-          └──────────┬──────────┘
-                     ▼
-          ┌─────────────────────┐
-          │   Agent 核心循环     │   ReAct：思考 → 工具调用 → 观察 → 再思考
-          │   (Agent Core Loop)  │
-          └──────────┬──────────┘
-                     │
-        ┌────────────┼────────────┐
-        ▼            ▼            ▼
-┌─────────────┐ ┌──────────┐ ┌──────────────┐
-│ 大模型接入层 │ │ 工具系统  │ │ Skill 加载系统 │
-│   LLM Layer │ │  Tools   │ │ Skill Loader │
-└─────────────┘ └──────────┘ └──────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                用户终端                                       │
+│  ┌──────────────┐    ┌─────────────────────┐    ┌──────────────────────────┐ │
+│  │ 单条命令模式  │    │ 交互式 REPL（全屏/行模式）│    │ 配置 / 帮助 / 版本信息    │ │
+│  └──────┬───────┘    └──────────┬──────────┘    └──────────────────────────┘ │
+└─────────┼───────────────────────┼──────────────────────────────────────────────┘
+          │                       │
+          └───────────┬───────────┘
+                      ▼
+            ┌─────────────────────┐
+            │     CLI 入口模块     │   commander 解析参数，分发执行模式
+            └──────────┬──────────┘
+                       ▼
+            ┌─────────────────────┐
+            │   Agent 核心循环     │   ReAct：思考 → 工具调用 → 观察 → 再思考
+            │   (Agent Core Loop)  │
+            └──────────┬──────────┘
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+┌─────────────┐ ┌──────────┐ ┌──────────────┐ ┌─────────────┐
+│ 大模型接入层 │ │ 工具系统  │ │ Skill 加载系统 │ │  子 Agent   │
+│   LLM Layer │ │  Tools   │ │ Skill Loader │ │   Factory   │
+└─────────────┘ └────┬─────┘ └──────────────┘ └─────────────┘
         ▲            │            ▲
         │            ▼            │
-        │     ┌──────────┐        │
-        └─────┤ 配置管理  ├────────┘
-              │  Config  │
-              └──────────┘
+        │    ┌─────────────────┐  │
+        └────┤ 配置 / 权限 / MCP ├──┘
+             │ Config / Perm / │
+             │     MCP Loader  │
+             └─────────────────┘
 ```
 
 ### 3.2 核心模块划分
 
 #### 3.2.1 CLI 入口模块
 
-- **职责**：解析命令行参数、初始化日志与配置、决定进入单条命令模式还是 REPL 模式、输出帮助信息。
-- **关键文件**：`src/cli/index.ts`、`src/cli/commands/`。
+- **职责**：解析命令行参数、初始化日志与配置、决定进入单条命令模式还是 REPL 模式、输出帮助信息。交互模式下支持两种 UI：行模式 ChatTUI（基于 `@inquirer/prompts`）和全屏 FullscreenUI（基于 `blessed`）。
+- **关键文件**：`src/cli/index.ts`、`src/cli/chat-ui.ts`、`src/cli/fullscreen-ui.ts`、`src/cli/login-wizard.ts`、`src/cli/task-queue.ts`。
 - **输入**：`process.argv`、环境变量、配置文件。
 - **输出**：调用 Agent 核心循环或打印版本/帮助信息。
 
@@ -157,8 +160,32 @@ Codelab 组织在长期的项目实践中沉淀了大量方法论、编码规范
   - `write_file`：写入或追加文件内容。
   - `bash`：执行本地 shell 命令。
   - `weather`：查询指定城市天气（基于 Open-Meteo 等公开 API）。
+  - `search_code`：搜索文件内容（优先 ripgrep，降级 Node.js）。
+  - `search_files`：按文件名搜索。
+- **MCP 工具**：外部 MCP 服务器提供的工具注册为 `{serverName}_{toolName}`。
 
-#### 3.2.5 Skill 加载系统
+#### 3.2.5 子 Agent 系统（AgentFactory）
+
+- **职责**：根据 `AgentDefinition` 创建专业化的子 Agent。子 Agent 可继承父 Agent 的部分上下文，并仅使用指定的工具和 Skill。
+- **关键文件**：`src/agent/agent-factory.ts`、`src/agent/types.ts`、`src/agents/builtins/*.ts`。
+- **内置 Agent**：`coder`、`explore`、`plan`。
+
+#### 3.2.6 会话持久化（SessionManager）
+
+- **职责**：保存、加载、复刻、列出会话。会话以 JSON 文件存储在 `~/.codelab-sage/sessions/`。
+- **关键文件**：`src/session/manager.ts`、`src/session/store.ts`、`src/session/types.ts`。
+
+#### 3.2.7 权限管理（PermissionManager）
+
+- **职责**：决定工具执行前是否需要二次确认。支持全局 YOLO 模式、按工具配置、工作目录外额外保护。
+- **关键文件**：`src/permissions/manager.ts`。
+
+#### 3.2.8 MCP 加载器（McpLoader）
+
+- **职责**：通过 stdio 启动外部 MCP 服务器，完成 `initialize`、`tools/list`，并将工具注册到 `ToolRegistry`。
+- **关键文件**：`src/mcp/client.ts`、`src/mcp/adapter.ts`、`src/mcp/loader.ts`、`src/mcp/types.ts`。
+
+#### 3.2.9 Skill 加载系统
 
 - **职责**：扫描指定目录下的 Skill 文件（Markdown + YAML frontmatter），解析元数据、正文、示例，将其按优先级拼接进 System Prompt。支持本地 Skill 目录与通过 npm 包分发的 Skill。
 - **关键文件**：`src/skills/loader.ts`、`src/skills/skill.ts`。
@@ -167,11 +194,21 @@ Codelab 组织在长期的项目实践中沉淀了大量方法论、编码规范
   - `SkillManifest`：元数据（名称、版本、作者、标签、激活条件）。
   - `SkillLoader`：扫描、过滤、排序、拼接。
 
-#### 3.2.6 配置管理模块
+#### 3.2.10 配置管理模块
 
 - **职责**：管理运行时配置，包括 API Key、默认模型、Skill 目录、日志级别、是否开启确认提示等。支持多层级配置覆盖：默认值 < 配置文件 < 环境变量 < 命令行参数。
 - **关键文件**：`src/config/config.ts`、`src/config/schema.ts`。
 - **存储位置**：`~/.codelab-sage/config.json`（用户级），项目级 `.codelab-sage.json`（可选）。
+
+#### 3.2.11 工具函数模块
+
+- **职责**：提供跨模块使用的通用工具函数。
+- **关键文件**：
+  - `src/utils/logger.ts`：日志输出。
+  - `src/utils/errors.ts`：统一错误类型。
+  - `src/utils/git.ts`：检测 Git 分支与工作区状态（用于状态栏显示）。
+  - `src/utils/context.ts`：Token 估算与上下文使用量计算。
+  - `src/utils/search.ts`：封装 ripgrep 代码搜索、glob 文件搜索。
 
 ---
 
@@ -214,8 +251,12 @@ codelab-sage --help
 | `--skill-dir` | `-s` | `path` | 自定义 Skill 目录，可多次指定 |
 | `--config` | `-c` | `path` | 指定配置文件路径 |
 | `--repl` | `-r` | 无 | 进入交互式对话模式 |
+| `--simple` | 无 | 无 | 使用简单行模式 REPL，而非全屏 UI |
+| `--role` | 无 | `string` | 激活指定角色 |
+| `--agent` | 无 | `string` | 激活指定子 Agent |
+| `--yolo` | 无 | 无 | 跳过所有破坏性确认 |
 | `--verbose` | `-v` | 无 | 输出详细日志（请求体、工具调用参数等） |
-| `--no-confirm` | 无 | 无 | 禁用危险操作二次确认（谨慎使用） |
+| `--no-confirm` | 无 | 无 | 禁用 `write_file` 覆盖确认（谨慎使用） |
 | `--api-key` | `-k` | `string` | 通过命令行传入 API Key（不推荐，仅调试） |
 | `--version` | `-V` | 无 | 显示版本号 |
 | `--help` | `-h` | 无 | 显示帮助信息 |
@@ -291,7 +332,7 @@ codelab-sage --help
 - **安全**：
   - 默认拒绝 `rm -rf /` 等危险命令。
   - 可配置命令白名单/黑名单。
-  - 对写操作或网络请求命令进行确认。
+  - 默认对命令执行进行二次确认，YOLO 模式跳过。
 
 #### 4.3.4 `weather`
 
@@ -301,6 +342,29 @@ codelab-sage --help
   - `units`（string，可选）：`metric` 或 `imperial`，默认 `metric`。
 - **实现**：调用 Open-Meteo Geocoding + Forecast API，无需 API Key。
 - **返回值**：温度、天气状况、风速等。
+
+#### 4.3.5 `search_code`
+
+- **用途**：搜索文件内容。
+- **参数**：
+  - `query`（string，必填）：要搜索的文本或正则。
+  - `path`（string，可选）：搜索范围。
+  - `filePattern`（string，可选）：文件 glob 过滤。
+  - `caseSensitive`（boolean，可选）。
+  - `contextLines`（number，可选）：匹配行上下文。
+  - `maxResults`（number，可选）。
+- **实现**：优先使用 `ripgrep`，不可用时降级为 Node.js 遍历。
+
+#### 4.3.6 `search_files`
+
+- **用途**：按文件名搜索。
+- **参数**：
+  - `query`（string，必填）。
+  - `path`（string，可选）。
+  - `maxResults`（number，可选）。
+- **实现**：优先使用 `ripgrep --files`，不可用时降级为 Node.js 遍历。
+
+> **跨平台适配**：bash 工具在 Windows 上自动使用 `cmd.exe`（或 `ComSpec` 环境变量指定的 shell），在 Unix 上使用 `bash -c`，无需用户手动配置。
 
 ### 4.4 Skill 系统的设计
 
@@ -377,20 +441,225 @@ Skill 2 正文...
 
 Skill 内容按顺序追加到基础提示之后，形成最终的 System Prompt。高优先级的 Skill 排在前面，确保其规则更可能被模型遵循。
 
-### 4.5 交互式对话模式的设计（REPL）
+### 4.5 交互式对话模式的设计（REPL / ChatTUI）
 
-进入 REPL 后，终端显示提示符 `sage>`。用户可连续输入多轮问题，Agent 保留上下文。支持以下命令：
+直接运行 `codelab-sage`（不带参数）即进入交互式聊天界面。界面使用 `@inquirer/prompts` 驱动输入循环，保证在 Windows PowerShell、cmd、Windows Terminal、macOS、Linux 等终端上稳定工作。输出部分使用 `chalk` 美化：消息以带颜色、分隔线的卡片形式展示，模型思考时显示 `ora` 加载动画。
 
-| REPL 命令 | 说明 |
+支持的命令：
+
+| 命令 | 说明 |
 | :--- | :--- |
-| `/exit` 或 `Ctrl+D` | 退出 REPL |
+| `/exit` | 退出 |
 | `/clear` | 清空当前会话上下文 |
-| `/skills` | 列出当前已加载的 Skill |
-| `/tools` | 列出当前可用工具 |
-| `/model` | 显示当前使用的模型 |
-| `/help` | 显示 REPL 帮助 |
+| `/login` | 交互式添加新的模型提供方 |
+| `/ollama <apikey>` | 快速接入本地 Ollama（默认 key：`ollama`） |
+| `/compact` | 压缩对话上下文（丢弃最旧 exchanges，保留系统提示与最新对话） |
+| `/models` | 列出当前所有已配置的模型提供方 |
+| `/model <name>` | 切换到指定提供方 |
+| `/roles` | 列出可用角色 |
+| `/role <name>` | 切换角色 |
+| `/agents` | 列出可用 Agent |
+| `/agent <name>` | 切换子 Agent |
+| `/plan <task>` | 调用 plan agent |
+| `/explore <query>` | 调用 explore agent |
+| `/search <query>` | 搜索代码 |
+| `/yolo on/off` | 切换 YOLO 模式 |
+| `/history` | 查看输入历史 |
+| `/status` | 查看当前状态（模型、Agent、角色、Git 分支等） |
+| `/skills` | 列出已加载的 Skill（含角色标注） |
+| `/queue list` | 显示任务队列 |
+| `/queue clear` | 清空等待中的任务 |
+| `/queue cancel` | 取消正在执行的任务 |
+| `/session ...` | 会话管理（save/list/load/fork/delete/new） |
+| `/help` | 显示帮助 |
 
-REPL 内部使用 `readline` 或 `@inquirer/prompts` 实现输入循环，支持行编辑、历史记录（通过 `readline` 的 `history` 数组）。
+`--repl` 参数保留，与不带参数效果相同。带查询参数运行时（如 `codelab-sage "帮我写代码"`）则为单次任务模式，执行完即退出。
+
+全屏 UI 中输入 `/` 会弹出分类命令菜单，支持上下箭头选择、Tab 补全、ESC 关闭。
+
+**Ctrl+C 行为**：
+- Sage 正在思考（调用 LLM 或流式输出）时，按一次 Ctrl+C 会发送 `AbortSignal` 中断当前请求，UI 回到可输入状态。
+- 空闲时，1.5 秒内连续按两次 Ctrl+C 才会退出程序；按一次仅提示“再按一次退出”。
+- Escape 键仍保持立即退出（全屏 UI 中）。
+
+### 4.6 多模型提供方设计
+
+#### 4.6.1 配置结构
+
+配置文件中的 `providers` 数组支持配置多个模型提供方：
+
+```json
+{
+  "providers": [
+    {
+      "id": "my-gpt4",
+      "provider": "openai",
+      "apiKey": "sk-...",
+      "model": "gpt-4o"
+    },
+    {
+      "id": "local",
+      "provider": "ollama",
+      "apiKey": "ollama",
+      "baseURL": "http://localhost:11434/v1",
+      "model": "llama3"
+    },
+    {
+      "id": "claude",
+      "provider": "anthropic",
+      "apiKey": "sk-ant-...",
+      "model": "claude-sonnet-4-20250514"
+    }
+  ],
+  "activeProvider": "my-gpt4"
+}
+```
+
+#### 4.6.2 支持的 provider 类型
+
+| Provider | 实现 | 说明 |
+| :--- | :--- | :--- |
+| `openai` | `OpenAIProvider` | OpenAI 及兼容 API |
+| `anthropic` | `AnthropicProvider` | Anthropic Messages API，内部做消息格式翻译（system 提取、tool 转 tool_result/content block） |
+| `ollama` | `OpenAIProvider`（复用） | 本地 Ollama，使用其 OpenAI 兼容端点 |
+| 自定义 + baseURL | `OpenAIProvider`（复用） | 任意 OpenAI 兼容 API（如 DeepSeek、Groq 等） |
+
+#### 4.6.3 运行时切换
+
+- `/model <name>` 调用 `Agent.switchProvider(entry, newProvider)`，其中 `<name>` 是 `/login` 时设置的别名。
+- 切换前检查是否有 pending tool call：若有则拒绝切换，提示用户等待当前回答完成
+- 切换后消息历史保留不删，由各 Provider 内部自行翻译消息格式
+- 配置自动持久化到 `~/.codelab-sage/config.json`
+
+#### 4.6.4 向后兼容
+
+如果配置文件中只有旧的 `apiKey` + `model` 字段（没有 `providers` 数组），系统自动创建一个 `id: "default"` 的 ProviderEntry，保证老用户零改动升级。
+
+#### 4.6.5 上下文窗口与压缩
+
+- 配置项 `contextLimit` 指定上下文上限（token 数），默认 `128000`。
+- 当前上下文使用量以 `context: 38.4% (100.6k/262.1k)` 形式显示在状态栏右下角。
+- 估算方式：未引入 tokenizer，使用字符数 `/ 4` 粗略估算 token（兼容 CJK 与 Latin 文本）。
+- 每次 AI 回复完成后，若使用量 `>= 100%`，自动调用 `Agent.compact()`：
+  - 保留 system prompt；
+  - 丢弃最旧的用户-助手 exchange；
+  - 始终保留最新一次 exchange；
+  - 直到剩余上下文低于 `contextLimit` 的 50%。
+- 用户可随时输入 `/compact` 手动触发压缩。
+
+### 4.7 任务队列
+
+- 新增 `TaskQueue` 类（`src/cli/task-queue.ts`），内存队列，支持 `normal` / `high` 优先级。
+- 普通用户输入与 `/search` 进入队尾；`/plan`、`/explore` 插入队首（高优先级）。
+- 当前任务执行期间，输入框保持可用，新输入自动入队。
+- 状态栏显示队列状态：
+  - 执行中：`正在处理: {preview} (1/{total})`
+  - 等待中：`队列: N 个任务等待中`
+  - 空闲：`等待输入`
+- 队列命令：`/queue list`、`/queue clear`、`/queue cancel`。
+- 程序退出时队列清空，不做持久化。
+
+### 4.8 子 Agent 设计
+
+#### 4.7.1 AgentDefinition
+
+子 Agent 通过 `AgentDefinition` 定义：
+
+```typescript
+interface AgentDefinition {
+  name: string;
+  description: string;
+  systemPrompt: string;
+  toolNames?: string[];
+  skillTags?: string[];
+  inheritParentMessages?: number;
+}
+```
+
+#### 4.7.2 AgentFactory
+
+`AgentFactory.createAgent(name)`：
+1. 查找 `AgentDefinition`。
+2. 根据 `toolNames` 过滤 `ToolRegistry`。
+3. 根据 `skillTags` 过滤 Skill。
+4. 使用 `systemPromptOverride` 创建新的 `Agent` 实例。
+
+#### 4.7.3 上下文继承
+
+子 Agent 通过 `runWithContext(task, parentMessages)` 运行，默认继承最近 5 条父对话消息。
+
+### 4.9 会话持久化设计
+
+#### 4.8.1 Session 结构
+
+```typescript
+interface Session {
+  id: string;
+  title: string;
+  cwd: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: Message[];
+  activeProvider?: string;
+  activeRole?: string;
+  activeAgent?: string;
+}
+```
+
+#### 4.8.2 存储位置
+
+`~/.codelab-sage/sessions/{id}.json`
+
+#### 4.8.3 恢复粒度
+
+加载会话时恢复完整对话历史。当前 provider、role、agent 由 UI 在加载后根据 `config` 处理。
+
+### 4.10 权限与 YOLO 设计
+
+#### 4.9.1 确认策略
+
+`PermissionManager.shouldConfirm(context)` 按以下顺序判断：
+1. YOLO 模式开启 → 不确认。
+2. 工具配置 `requireConfirm: false` → 不确认。
+3. 工具配置 `requireConfirm: true` → 仅当操作是破坏性时确认。
+4. 非破坏性操作 → 不确认。
+5. 破坏性操作且目标路径在当前工作目录外 → 确认。
+6. 破坏性操作 → 确认。
+
+#### 4.9.2 YOLO 模式
+
+- CLI：`--yolo`
+- REPL：`/yolo`、`/yolo on`、`/yolo off`
+- 配置：`yolo: true/false`
+
+### 4.11 MCP 支持设计
+
+#### 4.11.1 配置
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+      "env": { "KEY": "value" }
+    }
+  ]
+}
+```
+
+#### 4.10.2 工具注册
+
+MCP 工具注册为 `{serverName}_{toolName}`，避免不同服务器同名冲突。
+
+#### 4.10.3 生命周期
+
+`McpClient` 通过 stdio 与服务器通信：
+1. 发送 `initialize`。
+2. 发送 `tools/list` 获取工具列表。
+3. 调用 `tools/call` 执行工具。
+4. 进程退出时发送 `SIGTERM` 断开连接。
 
 ---
 
@@ -400,7 +669,7 @@ REPL 内部使用 `readline` 或 `@inquirer/prompts` 实现输入循环，支持
 
 System Prompt 在每次发送给 LLM 前动态构建，流程如下：
 
-1. **加载基础模板**：从 `src/prompts/system.txt` 或代码内字符串读取基础身份与行为约束。
+1. **加载基础模板**：System Prompt 基础身份与行为约束以字符串常量形式内嵌在 `src/agent/prompt.ts` 中，避免运行时依赖外部文件。
 2. **注入 Skill**：Skill Loader 扫描所有 Skill 文件，过滤激活的 Skill，按优先级排序，将每个 Skill 的正文拼接为 `## Skill: <name>\n<content>` 形式。
 3. **注入工具描述**：从 Tool Registry 获取所有注册工具的 JSON Schema，以 LLM 要求的格式追加到 System Prompt。
 4. **缓存与更新**：Skill 内容可缓存其哈希值，当文件变更时重新构建，避免每次请求都读取磁盘。
@@ -454,8 +723,8 @@ LLM 返回：{ role: 'assistant', content?: string, tool_calls?: [...] }
 ### 5.4 对话历史的存储方式
 
 - **会话内**：使用内存数组保存，REPL 模式全程保留，单条命令模式在任务完成后释放。
-- **持久化（可选）**：任务结束后，若配置开启，保存到 `~/.codelab-sage/history/<yyyy-mm-dd>.jsonl`，每行一条 JSON 对象，包含时间戳、输入、输出摘要、工具调用记录。
-- **隐私控制**：持久化前过滤掉可能包含 API Key、密码的消息内容；用户可通过配置关闭历史记录。
+- **持久化（Session 系统）**：通过 `/session save` 将当前会话完整保存到 `~/.codelab-sage/sessions/{id}.json`，支持后续 `/session load` 恢复。Session 包含完整的消息数组、时间戳、标题等元数据。
+- **隐私控制**：持久化前过滤掉可能包含 API Key、密码的消息内容。
 
 ---
 
@@ -495,6 +764,9 @@ API Key 是高度敏感信息，支持以下三种管理方式，按优先级从
   ],
   "logLevel": "info",
   "confirmDestructive": true,
+  "yolo": false,
+  "activeAgent": "coder",
+  "activeRole": "architect",
   "history": {
     "enabled": true,
     "maxDays": 30
@@ -502,9 +774,20 @@ API Key 是高度敏感信息，支持以下三种管理方式，按优先级从
   "tools": {
     "bash": {
       "allowedCommands": ["git", "npm", "node", "pnpm"],
-      "timeout": 30000
+      "timeout": 30000,
+      "requireConfirm": true
+    },
+    "write_file": {
+      "requireConfirm": true
     }
-  }
+  },
+  "mcpServers": [
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
+    }
+  ]
 }
 ```
 
@@ -515,7 +798,9 @@ API Key 是高度敏感信息，支持以下三种管理方式，按优先级从
 - **绝不日志打印 API Key**：日志中敏感字段统一替换为 `***`。
 - **路径白名单**：`read_file` 默认禁止读取 `.env`、SSH 私钥、npmrc 等文件。
 - **命令黑名单**：`bash` 工具内置危险命令黑名单，如 `rm -rf /`、`mkfs`、`dd` 等。
-- **覆盖确认**：`write_file` 覆盖已有文件、`bash` 执行写命令时默认要求确认。
+- **覆盖确认**：`write_file` 覆盖已有文件、`bash` 执行命令时默认要求确认。
+- **工作目录外保护**：破坏性操作若目标路径超出当前工作目录，强制要求确认（YOLO 模式除外）。
+- **YOLO 模式**：用户可通过 `--yolo` 或 `/yolo on` 显式跳过确认，状态栏会显示 `YOLO` 提醒。
 - **环境隔离**：建议在容器或受限用户下运行；不推荐在生产服务器上以 root 身份运行。
 - **Token 消耗提示**：在 `--verbose` 模式下输出每次请求的 token 消耗，帮助用户控制成本。
 
@@ -537,55 +822,92 @@ API Key 是高度敏感信息，支持以下三种管理方式，按优先级从
 
 ## 第七章：开发计划
 
-### 7.1 阶段一：项目骨架与工具链（第 1 周）
+### 7.1 阶段一：项目骨架与工具链（第 1 周）✅ 已完成
 
 - 初始化 TypeScript + Node 项目。
 - 配置 ESLint、Prettier、Vitest、tsconfig。
 - 实现 CLI 入口与参数解析。
 - 输出：可运行的 `codelab-sage --version`。
 
-### 7.2 阶段二：大模型接入层（第 1-2 周）
+### 7.2 阶段二：大模型接入层（第 1-2 周）✅ 已完成
 
 - 抽象 `LLMProvider` 接口。
 - 实现 OpenAI Provider，支持聊天与 Tool Calling。
 - 接入配置模块，支持 API Key、模型选择。
 - 输出：可通过 CLI 与 OpenAI 模型进行简单对话。
 
-### 7.3 阶段三：工具系统（第 2-3 周）
+### 7.3 阶段三：工具系统（第 2-3 周）✅ 已完成
 
 - 实现 Tool Registry、Tool Executor。
 - 完成 `read_file`、`write_file`、`bash`、`weather` 四个内置工具。
 - 实现参数校验、安全确认、结果格式化。
 - 输出：Agent 可调用工具完成文件读写、命令执行、天气查询。
 
-### 7.4 阶段四：Agent 核心循环（第 3 周）
+### 7.4 阶段四：Agent 核心循环（第 3 周）✅ 已完成
 
 - 实现 ReAct 循环。
 - 维护对话历史。
 - 处理工具调用与结果回送。
 - 输出：支持多轮工具调用并给出最终答案。
 
-### 7.5 阶段五：Skill 加载系统（第 3-4 周）
+### 7.5 阶段五：Skill 加载系统（第 3-4 周）✅ 已完成
 
 - 定义 Skill 文件格式与 Schema。
 - 实现本地目录扫描、排序、拼接。
 - 将 Skill 内容注入 System Prompt。
 - 输出：加载 Codelab 规范 Skill 后，模型回答体现组织风格。
 
-### 7.6 阶段六：交互式 REPL 与用户体验（第 4 周）
+### 7.6 阶段六：交互式 REPL 与用户体验（第 4 周）✅ 已完成
 
 - 实现 REPL 模式与内置命令。
 - 添加颜色、加载动画、错误提示风格。
 - 完善帮助信息。
 - 输出：具备良好终端体验的交互式 Agent。
 
-### 7.7 阶段七：测试、文档与 npm 发布（第 5 周）
+### 7.7 阶段七：测试、文档与 CI（第 5 周）✅ 已完成
 
 - 编写单元测试与集成测试。
-- 完善 README、API 文档、贡献指南。
-- 配置 GitHub Actions CI。
-- 发布到 npm（@codelab/sage 或 codelab-sage）。
-- 输出：开源可用的 v0.1.0 版本。
+- 完善 README、Skill 编写指南、贡献指南。
+- 配置 GitHub Actions CI（Linux + Windows，Node 18/20/22 矩阵）。
+- 修复跨平台 bash 工具兼容（Windows cmd / Unix bash 自动检测）。
+
+### 7.8 阶段八：多模型提供方支持（v0.2.0）✅ 已完成
+
+- 新增 `ProviderEntry` 配置 schema，支持多 provider 列表。
+- 实现 `AnthropicProvider`（Anthropic Messages API，含消息格式翻译层）。
+- 支持 Ollama 本地模型（复用 OpenAIProvider + 自动 baseURL）。
+- REPL 新增 `/login`、`/models`、`/model <name>` 命令。
+- `Agent.switchProvider()` 支持运行时切换，含 pending tool_call 门禁。
+
+### 7.9 阶段九：子 Agent 与搜索工具（v0.3.0）✅ 已完成
+
+- 定义 `AgentDefinition` / `AgentContext` / `AgentRegistry`。
+- 实现 `AgentFactory`，支持按工具名与 Skill tags 过滤。
+- 内置 `coder`、`explore`、`plan` 三个子 Agent。
+- `Agent.runWithContext()` 支持继承父对话上下文。
+- 实现 `search_code` 与 `search_files` 工具（ripgrep + Node.js 降级）。
+- UI 新增 `/agents`、`/agent`、`/plan`、`/explore`、`/search` 命令。
+
+### 7.10 阶段十：会话持久化（v0.4.0）✅ 已完成
+
+- 实现 `SessionStore`（JSON 文件存储在 `~/.codelab-sage/sessions/`）。
+- 实现 `SessionManager`（create/save/load/fork/delete/list）。
+- `Agent` 支持 `exportMessages()` / `importMessages()`。
+- UI 新增 `/session` 命令族。
+
+### 7.11 阶段十一：权限与 YOLO 模式（v0.5.0）✅ 已完成
+
+- 实现 `PermissionManager`，支持全局 YOLO、按工具配置、工作目录外保护。
+- CLI 新增 `--yolo`，配置新增 `yolo` 字段。
+- UI 新增 `/yolo` 命令，状态栏显示 YOLO 状态。
+- `bash` 与 `write_file` 工具接入权限管理。
+
+### 7.12 阶段十二：MCP 支持（v0.6.0）✅ 已完成
+
+- 配置新增 `mcpServers`。
+- 实现 `McpClient`（stdio JSON-RPC）。
+- 实现 `createMcpTools` 适配器，工具名前缀 `{serverName}_`。
+- `loadMcpServers()` 在启动时自动连接并注册 MCP 工具。
 
 ---
 
@@ -595,7 +917,7 @@ API Key 是高度敏感信息，支持以下三种管理方式，按优先级从
 codelab-sage/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml              # GitHub Actions 持续集成
+│       └── ci.yml              # GitHub Actions CI（Linux + Windows，Node 18/20/22）
 ├── bin/
 │   └── sage.js                 # npm 可执行入口，调用 dist/cli/index.js
 ├── docs/
@@ -603,50 +925,84 @@ codelab-sage/
 │   ├── skill-authoring.md      # Skill 编写指南
 │   └── contributing.md         # 贡献者指南
 ├── skills/
-│   └── codelab-core.md         # 内置 Codelab 核心 Skill 示例
+│   ├── codelab-core.md         # 内置 Codelab 核心 Skill 示例
+│   ├── prompt-engineering.md   # 提示词工程 Skill
+│   ├── tool-safety.md          # 工具安全 Skill
+│   └── typescript-cli.md       # TypeScript CLI Skill
 ├── src/
 │   ├── agent/
-│   │   ├── agent.ts            # Agent 类，外部主入口
-│   │   ├── loop.ts             # ReAct 循环实现
-│   │   └── history.ts          # 对话历史管理
+│   │   ├── agent.ts            # Agent 类与 ReAct 循环
+│   │   ├── agent-factory.ts    # 子 Agent 工厂
+│   │   ├── types.ts            # Agent 定义类型
+│   │   └── prompt.ts           # System Prompt 构建
+│   ├── agents/
+│   │   └── builtins/           # 内置子 Agent（coder/explore/plan）
 │   ├── cli/
 │   │   ├── index.ts            # CLI 入口与参数解析
-│   │   ├── repl.ts             # 交互式 REPL 实现
-│   │   └── commands/           # 子命令扩展目录
-│   │       └── config.ts       # config 子命令（如初始化配置向导）
+│   │   ├── fullscreen-ui.ts    # 全屏 blessed UI
+│   │   ├── chat-ui.ts          # 简单行模式聊天界面
+│   │   ├── login-wizard.ts     # 交互式 provider 添加向导
+│   │   └── repl.ts             # 交互式 REPL 实现（备用）
 │   ├── config/
 │   │   ├── config.ts           # 配置加载与合并
 │   │   ├── schema.ts           # zod 配置 schema
 │   │   └── defaults.ts         # 默认配置
 │   ├── llm/
-│   │   ├── provider.ts         # LLMProvider 抽象接口
+│   │   ├── provider.ts         # LLMProvider 抽象类型
 │   │   ├── openai-provider.ts  # OpenAI 实现
+│   │   ├── anthropic-provider.ts # Anthropic Claude 实现
 │   │   └── factory.ts          # Provider 工厂
-│   ├── prompts/
-│   │   └── system.txt          # 基础 System Prompt 模板
 │   ├── skills/
 │   │   ├── loader.ts           # Skill 扫描与加载
-│   │   ├── skill.ts            # Skill 数据结构与解析
+│   │   ├── skill.ts            # Skill 数据结构与 zod schema
 │   │   └── renderer.ts         # Skill 拼接为 Prompt
 │   ├── tools/
+│   │   ├── builtins.ts         # 内置工具集合与注册入口
 │   │   ├── registry.ts         # 工具注册表
 │   │   ├── executor.ts         # 工具执行器
-│   │   ├── schema.ts           # 工具 schema 定义
+│   │   ├── tool.ts             # Tool 接口定义
 │   │   └── definitions/
+│   │       ├── bash.ts         # bash 工具
 │   │       ├── readFile.ts
 │   │       ├── writeFile.ts
-│   │       ├── bash.ts
-│   │       └── weather.ts
+│   │       ├── weather.ts
+│   │       ├── searchCode.ts
+│   │       └── searchFiles.ts
+│   ├── session/
+│   │   ├── manager.ts          # 会话管理
+│   │   ├── store.ts            # 会话文件存储
+│   │   └── types.ts            # 会话类型
+│   ├── permissions/
+│   │   └── manager.ts          # 权限与 YOLO 管理
+│   ├── mcp/
+│   │   ├── client.ts           # MCP stdio 客户端
+│   │   ├── adapter.ts          # MCP 工具适配
+│   │   ├── loader.ts           # MCP 服务器加载
+│   │   └── types.ts            # MCP 类型
 │   ├── types/
 │   │   └── index.ts            # 全局类型定义
 │   ├── utils/
-│   │   ├── errors.ts           # 错误基类
+│   │   ├── errors.ts           # 错误基类 CodelabSageError
 │   │   ├── logger.ts           # 日志工具
-│   │   └── fs.ts               # 文件工具
+│   │   ├── search.ts           # 搜索工具实现
+│   │   └── git.ts              # Git 状态读取
 │   └── index.ts                # 库入口（供程序化调用）
 ├── tests/
 │   ├── unit/                   # 单元测试
+│   │   ├── agent.test.ts
+│   │   ├── agent-factory.test.ts
+│   │   ├── config.test.ts
+│   │   ├── skills.test.ts
+│   │   ├── tools.test.ts
+│   │   ├── search.test.ts
+│   │   ├── session/
+│   │   │   ├── store.test.ts
+│   │   │   └── manager.test.ts
+│   │   ├── permissions.test.ts
+│   │   └── mcp.test.ts
 │   ├── integration/            # 集成测试
+│   │   ├── agent-loop.test.ts
+│   │   └── config-skills.test.ts
 │   └── fixtures/               # 测试数据
 ├── .env.example                # 环境变量示例
 ├── .eslintrc.cjs
@@ -663,11 +1019,15 @@ codelab-sage/
 - `bin/`：npm 包发布后的可执行脚本入口。
 - `docs/`：面向开发者与用户的文档。
 - `skills/`：项目内置的 Skill 模板，安装后也会复制到用户目录。
-- `src/agent/`：核心推理循环。
+- `src/agent/`：核心推理循环与子 Agent 工厂。
+- `src/agents/`：内置子 Agent 定义。
 - `src/cli/`：命令行交互层。
 - `src/llm/`：大模型接入抽象。
 - `src/tools/`：工具定义与执行。
 - `src/skills/`：Skill 加载与渲染。
+- `src/session/`：会话持久化。
+- `src/permissions/`：权限与 YOLO 管理。
+- `src/mcp/`：MCP 客户端与适配器。
 - `tests/`：测试用例，尽量覆盖核心路径与错误分支。
 
 ---
@@ -741,12 +1101,12 @@ Examples:
 
 ### 10.1 后续可迭代的功能方向
 
-- **多模型支持**：在 OpenAI 基础上接入 Anthropic Claude、Google Gemini、Ollama 本地模型等。
+- **更多 LLM 提供方**：Google Gemini、本地模型（Ollama 以上已支持）等。
 - **长记忆能力**：基于向量的长期记忆，允许 Agent 记住用户偏好与项目上下文。
-- **计划与任务分解**：支持 Agent 先制定任务计划，再逐步执行并跟踪进度。
 - **代码审查工作流**：直接对 `git diff` 进行审查，输出符合 Codelab 规范的 Review 意见。
 - **CI/CD 集成**：作为 GitHub Action 运行，自动对 PR 进行评论、检查与建议。
 - **Web UI**：在终端之外提供可选的浏览器界面，展示对话历史与工具执行详情。
+- **MCP SSE 传输**：除 stdio 外支持 SSE 远程 MCP 服务器。
 
 ### 10.2 扩展性设计考虑
 
@@ -755,7 +1115,7 @@ Examples:
 - **Provider 抽象**：`LLMProvider` 接口屏蔽不同模型差异，未来接入新模型无需改动核心循环。
 - **Hook 机制**：在消息发送前后、工具执行前后提供 Hook，方便插件拦截与增强。
 - **配置扩展**：配置文件支持插件字段，允许第三方插件读取自己的配置。
-- **MCP 协议兼容**：未来可考虑兼容 Model Context Protocol，接入更广泛的工具生态。
+- **MCP 生态**：已兼容 Model Context Protocol stdio 模式，可接入更广泛的工具生态。
 
 ---
 

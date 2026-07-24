@@ -1,9 +1,17 @@
 import { spawn } from 'child_process';
+import os from 'os';
 import path from 'path';
-import { confirm } from '@inquirer/prompts';
 import type { SageConfig } from '../../config/schema.js';
 import type { Tool } from '../tool.js';
 import { CodelabSageError } from '../../utils/errors.js';
+import { PermissionManager } from '../../permissions/manager.js';
+
+function getShell(): { bin: string; flag: string } {
+  if (os.platform() === 'win32') {
+    return { bin: process.env.ComSpec ?? 'cmd.exe', flag: '/c' };
+  }
+  return { bin: 'bash', flag: '-c' };
+}
 
 const BLOCKED_PATTERNS = [
   /rm\s+-rf\s+\//,
@@ -14,7 +22,7 @@ const BLOCKED_PATTERNS = [
   /:\(\)\{\s*:\|:&/,
 ];
 
-export function createBashTool(config: SageConfig): Tool {
+export function createBashTool(config: SageConfig, permissionManager?: PermissionManager): Tool {
   const bashConfig = config.tools?.bash;
   const timeout = bashConfig?.timeout ?? 30000;
   const requireConfirm = bashConfig?.requireConfirm ?? true;
@@ -24,7 +32,7 @@ export function createBashTool(config: SageConfig): Tool {
   return {
     name: 'bash',
     description:
-      'Execute a shell command. Use with caution: destructive or system-level commands may be blocked or require confirmation.',
+      'Execute a shell command. Use with caution: destructive or system-level commands may be blocked or require confirmation. YOLO mode skips confirmations.',
     parameters: {
       type: 'object',
       properties: {
@@ -79,18 +87,25 @@ export function createBashTool(config: SageConfig): Tool {
         }
       }
 
-      if (requireConfirm) {
-        const answer = await confirm({
-          message: `Execute command: ${command}`,
-          default: false,
-        });
+      const shouldConfirm =
+        permissionManager?.shouldConfirm({
+          toolName: 'bash',
+          destructive: requireConfirm,
+        }) ?? requireConfirm;
+
+      if (shouldConfirm) {
+        const answer = permissionManager
+          ? await permissionManager.confirm(`Execute command: ${command}`, false)
+          : true;
         if (!answer) {
           throw new CodelabSageError('User declined to execute command', 'TOOL_USER_DECLINED');
         }
       }
 
+      const shell = getShell();
+
       return new Promise((resolve, reject) => {
-        const child = spawn('bash', ['-c', command], {
+        const child = spawn(shell.bin, [shell.flag, command], {
           cwd,
           env: process.env,
         });

@@ -49,5 +49,6 @@ export interface LLMProvider {
     messages: Message[];
     tools: ToolDefinition[];
     model: string;
+    signal?: AbortSignal;
   }): Promise<LLMResponse>;
 }

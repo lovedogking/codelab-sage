@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { createToolRegistry } from '../../src/tools/builtins.js';
+import { PermissionManager } from '../../src/permissions/manager.js';
 import type { SageConfig } from '../../src/config/schema.js';
 
 const TMP_DIR = path.join(os.tmpdir(), 'codelab-sage-test-tools');
@@ -58,5 +59,25 @@ describe('built-in tools', () => {
     const registry = createToolRegistry(TEST_CONFIG);
     const tool = registry.get('bash')!;
     await expect(tool.execute({ command: 'rm -rf /' })).rejects.toThrow();
+  });
+
+  it('search tools are registered', () => {
+    const registry = createToolRegistry(TEST_CONFIG);
+    expect(registry.get('search_code')).toBeDefined();
+    expect(registry.get('search_files')).toBeDefined();
+  });
+
+  it('write_file overwrites existing file when YOLO is enabled', async () => {
+    const filePath = path.join(TMP_DIR, 'existing.txt');
+    await fs.writeFile(filePath, 'old', 'utf-8');
+
+    const permissionManager = new PermissionManager({ yolo: true });
+    const registry = createToolRegistry(TEST_CONFIG, permissionManager);
+    const tool = registry.get('write_file')!;
+    const result = await tool.execute({ path: filePath, content: 'new' });
+
+    expect(result).toContain('Wrote');
+    const content = await fs.readFile(filePath, 'utf-8');
+    expect(content).toBe('new');
   });
 });

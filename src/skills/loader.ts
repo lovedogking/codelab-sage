@@ -78,3 +78,16 @@ export async function loadSkills(skillDirs: string[]): Promise<Skill[]> {
 
   return skills.sort((a, b) => b.priority - a.priority);
 }
+
+/**
+ * Filter skills by an active role.
+ * Skills without a `role` field are always included (base skills).
+ * Skills with a `role` field are included only when it matches the active role.
+ */
+export function filterSkillsByRole(skills: Skill[], role?: string): Skill[] {
+  if (!role) {
+    return skills;
+  }
+
+  return skills.filter((skill) => !skill.role || skill.role === role);
+}

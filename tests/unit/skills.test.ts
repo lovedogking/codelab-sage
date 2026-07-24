@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { loadSkills } from '../../src/skills/loader.js';
+import { loadSkills, filterSkillsByRole } from '../../src/skills/loader.js';
+import type { Skill } from '../../src/skills/skill.js';
 
 const TMP_DIR = path.join(os.tmpdir(), 'codelab-sage-test-skills');
 
@@ -46,5 +47,63 @@ This is the body.
   it('ignores missing directories', async () => {
     const skills = await loadSkills([path.join(TMP_DIR, 'missing')]);
     expect(skills).toHaveLength(0);
+  });
+
+  it('parses role field from frontmatter', async () => {
+    const content = `---
+name: architect
+role: architect
+priority: 100
+---
+
+# Architect
+
+Think like a software architect.
+`;
+    await fs.writeFile(path.join(TMP_DIR, 'architect.md'), content, 'utf-8');
+
+    const skills = await loadSkills([TMP_DIR]);
+    expect(skills).toHaveLength(1);
+    expect(skills[0].role).toBe('architect');
+  });
+});
+
+describe('filterSkillsByRole', () => {
+  const base: Skill = {
+    name: 'base',
+    content: 'base content',
+    filePath: '/tmp/base.md',
+    priority: 10,
+  };
+
+  const architect: Skill = {
+    name: 'architect',
+    role: 'architect',
+    content: 'architect content',
+    filePath: '/tmp/architect.md',
+    priority: 20,
+  };
+
+  const reviewer: Skill = {
+    name: 'reviewer',
+    role: 'reviewer',
+    content: 'reviewer content',
+    filePath: '/tmp/reviewer.md',
+    priority: 30,
+  };
+
+  it('returns all skills when no role is set', () => {
+    const skills = filterSkillsByRole([base, architect, reviewer], undefined);
+    expect(skills.map((s) => s.name)).toEqual(['base', 'architect', 'reviewer']);
+  });
+
+  it('keeps base skills and matching role skills', () => {
+    const skills = filterSkillsByRole([base, architect, reviewer], 'architect');
+    expect(skills.map((s) => s.name)).toEqual(['base', 'architect']);
+  });
+
+  it('returns only base skills when role has no matches', () => {
+    const skills = filterSkillsByRole([base, architect, reviewer], 'unknown');
+    expect(skills.map((s) => s.name)).toEqual(['base']);
   });
 });

@@ -27,6 +27,7 @@ export class OpenAIProvider implements LLMProvider {
     messages: Message[];
     tools: ToolDefinition[];
     model: string;
+    signal?: AbortSignal;
   }): Promise<LLMResponse> {
     const openaiTools = options.tools.map((tool) => ({
       type: 'function' as const,
@@ -38,11 +39,14 @@ export class OpenAIProvider implements LLMProvider {
     }));
 
     try {
-      const completion = await this.client.chat.completions.create({
-        model: options.model,
-        messages: options.messages as OpenAI.Chat.ChatCompletionMessageParam[],
-        tools: openaiTools,
-      });
+      const completion = await this.client.chat.completions.create(
+        {
+          model: options.model,
+          messages: toOpenAIMessages(options.messages),
+          tools: openaiTools,
+        },
+        { signal: options.signal },
+      );
 
       const choice = completion.choices[0];
       if (!choice) {
@@ -76,6 +80,31 @@ export class OpenAIProvider implements LLMProvider {
       );
     }
   }
+}
+
+/**
+ * Convert internal messages to OpenAI format.
+ * Ensures each assistant tool_call has the required `type: 'function'` field,
+ * which some providers (e.g. DeepSeek) enforce strictly.
+ */
+function toOpenAIMessages(messages: Message[]): OpenAI.Chat.ChatCompletionMessageParam[] {
+  return messages.map((msg) => {
+    if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+      return {
+        role: 'assistant',
+        content: msg.content || null,
+        tool_calls: msg.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments),
+          },
+        })),
+      };
+    }
+    return msg as OpenAI.Chat.ChatCompletionMessageParam;
+  });
 }
 
 function safeParseJson(input: string): Record<string, unknown> {
