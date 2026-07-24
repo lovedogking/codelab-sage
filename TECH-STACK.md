@@ -27,7 +27,7 @@
 
 ### 2.1 光标与输入
 
-- **全屏模式**：`blessed.textbox` + `inputOnFocus` + 人工光标 (`artificial: true`)，由 `ensureInputFocus()` 统一聚焦。
+- **全屏模式**：`blessed.textbox` + `inputOnFocus: false`（由 screen 级 `keypress` 事件手动转发到 textbox，绕过 blessed 的焦点分发）+ 人工光标 (`artificial: true`)，由 `ensureInputFocus()` 统一聚焦并 `screen.render()`。
 - **简单模式**：`@inquirer/prompts` 的 `input()`，依赖其内部 readline 管理光标。
 - **命令菜单**：`blessed.box` 浮层，通过监听 `inputBox` 的 `keypress` 事件实时过滤 `/` 命令。
 
@@ -150,7 +150,7 @@
 | 技术 | 用途 |
 |------|------|
 | **GitHub Actions** | `.github/workflows/ci.yml` |
-| **矩阵构建** | Ubuntu + Windows，Node 18 / 20 / 22 |
+| **矩阵构建** | Ubuntu + Windows，Node 18 / 20 / 22（触发分支：`master`） |
 | **流水线** | install → lint → format check → build → test |
 
 ---
